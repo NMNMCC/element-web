@@ -14,6 +14,7 @@ import {
     HttpApiEvent,
     type MatrixClient,
     MatrixEvent,
+    MatrixSafetyError,
     MsgType,
     type RoomType,
     SyncState,

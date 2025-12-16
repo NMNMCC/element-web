@@ -8,7 +8,7 @@ Please see LICENSE files in the repository root for full details.
 import {
     ClientEvent,
     EventStatus,
-    type MatrixError,
+    MatrixSafetyError,
     type Room,
     RoomEvent,
     SyncState,
@@ -66,6 +66,24 @@ interface IProps {
     room: Room;
 }
 
+export function getTextForSafetyHarm(error: MatrixSafetyError): string {
+    const translatedStrings = [];
+    for (const harmCategory of error.harms) {
+        switch (harmCategory) {
+            case "org.matrix.msc4387.spam":
+            // case "m.spam":
+                translatedStrings.push(_t("room|safety|harms|spam"));
+                break;
+        }
+    }
+    if (translatedStrings.length > 1) {
+        return _t("room|safety|harms|multiple");
+    } else if (translatedStrings.length === 0) {
+        return error.data.error ?? _t("room|safety|harms|generic");
+    }
+    return translatedStrings[0];
+}
+
 export function useRoomStatusBarViewModel({ room }: IProps): RoomStatusBarVM {
     const client = useMatrixClientContext();
     const syncState = useTypedEventEmitterState(
@@ -77,6 +95,7 @@ export function useRoomStatusBarViewModel({ room }: IProps): RoomStatusBarVM {
     );
     const [isResending, setResending] = useState(false);
     const unsentMessages = useTypedEventEmitterState(room, RoomEvent.LocalEchoUpdated, () => {
+        return [{error: new MatrixSafetyError({ harms: ["something.unknown", "other.thing"], errcode: "ORG.MATRIX.MSC4387_SAFETY", expires: Date.now() + 60000})}];
         return room.getPendingEvents().filter(function (ev) {
             const isNotSent = ev.status === EventStatus.NOT_SENT;
             return isNotSent;
@@ -97,46 +116,43 @@ export function useRoomStatusBarViewModel({ room }: IProps): RoomStatusBarVM {
     }, [room]);
 
     const unsentMessagesTitle = useMemo(() => {
-        let consentError: MatrixError | null = null;
-        let resourceLimitError: MatrixError | null = null;
         for (const m of unsentMessages) {
             if (!m.error) {
                 continue;
             }
             if (m.error.errcode === "M_CONSENT_NOT_GIVEN") {
-                consentError = m.error;
-                break;
+                return _t(
+                    "room|status_bar|requires_consent_agreement",
+                    {},
+                    {
+                        consentLink: (sub) => (
+                            <ExternalLink href={m.error!.data?.consent_uri} target="_blank" rel="noreferrer noopener">
+                                {sub}
+                            </ExternalLink>
+                        ),
+                    },
+                );
             }
             if (m.error.errcode === "M_RESOURCE_LIMIT_EXCEEDED") {
-                resourceLimitError = m.error;
-                break;
+                return messageForResourceLimitError(
+                    m.error.data.limit_type,
+                    m.error.data.admin_contact,
+                    {
+                        "monthly_active_user": _td("room|status_bar|monthly_user_limit_reached"),
+                        "hs_disabled": _td("room|status_bar|homeserver_blocked"),
+                        "": _td("room|status_bar|exceeded_resource_limit"),
+                    },
+                );
+            }
+            if (m.error instanceof MatrixSafetyError) {
+                return _t(
+                    "room|safety|message_not_sent_unsafe", {
+                        specificError: getTextForSafetyHarm(m.error) 
+                    }
+                );
             }
         }
-        if (consentError) {
-            return _t(
-                "room|status_bar|requires_consent_agreement",
-                {},
-                {
-                    consentLink: (sub) => (
-                        <ExternalLink href={consentError!.data?.consent_uri} target="_blank" rel="noreferrer noopener">
-                            {sub}
-                        </ExternalLink>
-                    ),
-                },
-            );
-        } else if (resourceLimitError) {
-            return messageForResourceLimitError(
-                resourceLimitError.data.limit_type,
-                resourceLimitError.data.admin_contact,
-                {
-                    "monthly_active_user": _td("room|status_bar|monthly_user_limit_reached"),
-                    "hs_disabled": _td("room|status_bar|homeserver_blocked"),
-                    "": _td("room|status_bar|exceeded_resource_limit"),
-                },
-            );
-        } else {
-            return _t("room|status_bar|some_messages_not_sent");
-        }
+        return _t("room|status_bar|some_messages_not_sent");
     }, [unsentMessages]);
 
     const hasConnectionError = useMemo(() => {
